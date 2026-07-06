@@ -1,0 +1,312 @@
+<meta charset="utf-8">
+<title>Live Events Tracker — Earthquakes · ISS · Flights</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root{--bg:#0b0e14;--panel:rgba(17,22,34,.92);--line:#242c3d;--txt:#e6edf3;--dim:#8b98a9;--dimmer:#5a6675;--accent:#f0b90b;--up:#0ecb81;--down:#f6465d;}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
+    font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  #map{position:absolute;inset:0;background:#0b0e14}
+  .leaflet-container{background:#0b0e14}
+  /* control panel */
+  .ui{position:absolute;top:14px;left:14px;z-index:1000;width:250px;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    backdrop-filter:blur(8px);overflow:hidden}
+  .ui h1{font-size:13px;margin:0;padding:12px 14px;letter-spacing:.5px;border-bottom:1px solid var(--line)}
+  .ui h1 span{color:var(--accent)}
+  .layer{display:flex;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none}
+  .layer:hover{background:rgba(255,255,255,.03)}
+  .layer input{accent-color:var(--accent);width:15px;height:15px}
+  .layer .ic{font-size:16px;width:20px;text-align:center}
+  .layer .name{flex:1}
+  .layer .name b{display:block;font-size:12px}
+  .layer .name small{color:var(--dimmer);font-size:10px}
+  .layer .cnt{font-variant-numeric:tabular-nums;font-weight:700;font-size:14px;text-align:right}
+  .layer .dot{width:7px;height:7px;border-radius:50%;background:var(--dimmer);margin-left:2px}
+  .layer .dot.on{background:var(--up)} .layer .dot.err{background:var(--down)}
+  .foot{padding:9px 14px;font-size:10px;color:var(--dimmer);line-height:1.5}
+  .foot a{color:var(--dim)}
+  /* legend */
+  .legend{position:absolute;bottom:16px;left:14px;z-index:1000;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:10px;color:var(--dim);backdrop-filter:blur(8px)}
+  .legend .row{display:flex;align-items:center;gap:7px;margin:3px 0}
+  .legend .sw{width:11px;height:11px;border-radius:50%}
+  /* seismic learning panel (top-right) */
+  .learn{position:absolute;top:14px;right:14px;z-index:1000;width:288px;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;backdrop-filter:blur(8px);overflow:hidden}
+  .learn h2{font-size:12px;margin:0;padding:11px 14px;letter-spacing:.5px;border-bottom:1px solid var(--line)}
+  .learn h2 span{color:var(--accent)}
+  .learn .sec{padding:11px 14px;border-bottom:1px solid var(--line)}
+  .learn .cap{font-size:9.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin-bottom:7px}
+  .learn .kv{display:flex;justify-content:space-between;align-items:baseline;margin:4px 0;font-size:12px}
+  .learn .kv .k{color:var(--dim)}
+  .learn .kv .v{font-weight:700;font-variant-numeric:tabular-nums}
+  .learn .big{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+  .learn .hint{font-size:10px;color:var(--dimmer);margin-top:6px;line-height:1.5}
+  .learn .up{color:var(--up)} .learn .down{color:var(--down)}
+  .learn .watch{font-size:11px;line-height:1.5;color:var(--dim)}
+  .learn .watch b{color:var(--down)}
+  .fail{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:2000;
+    background:var(--bg);text-align:center;padding:30px}
+  /* leaflet marker glyphs */
+  .plane svg{display:block;filter:drop-shadow(0 0 2px rgba(0,0,0,.8))}
+  .iss-ic{font-size:22px;filter:drop-shadow(0 0 6px rgba(240,185,11,.9))}
+  .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#131824;color:#e6edf3;border:1px solid var(--line)}
+  .leaflet-popup-content{font:12px/1.5 ui-monospace,Menlo,monospace;margin:10px 12px}
+  .leaflet-popup-content b{color:var(--accent)}
+  .leaflet-bar a{background:#131824;color:#e6edf3;border-color:var(--line)}
+</style>
+
+<div id="map"></div>
+
+<div class="ui">
+  <h1>LIVE <span>EVENTS</span> TRACKER</h1>
+  <label class="layer"><input type="checkbox" id="t_qk" checked>
+    <span class="ic">🔴</span><span class="name"><b>Earthquakes</b><small>USGS · last 24h</small></span>
+    <span class="cnt" id="c_qk">—</span><span class="dot" id="d_qk"></span></label>
+  <label class="layer"><input type="checkbox" id="t_iss" checked>
+    <span class="ic">🛰️</span><span class="name"><b>ISS</b><small>updates every 5s</small></span>
+    <span class="cnt" id="c_iss">—</span><span class="dot" id="d_iss"></span></label>
+  <label class="layer"><input type="checkbox" id="t_fl" checked>
+    <span class="ic">✈️</span><span class="name"><b>Flights</b><small>within 250nm of center</small></span>
+    <span class="cnt" id="c_fl">—</span><span class="dot" id="d_fl"></span></label>
+  <div class="foot" id="foot">connecting…</div>
+</div>
+
+<div class="legend">
+  <div style="color:var(--txt);margin-bottom:5px">Earthquake magnitude</div>
+  <div class="row"><span class="sw" style="background:#7fd8be"></span>&lt; 2</div>
+  <div class="row"><span class="sw" style="background:#ffd166"></span>2 – 3</div>
+  <div class="row"><span class="sw" style="background:#f4a261"></span>3 – 4</div>
+  <div class="row"><span class="sw" style="background:#f4785d"></span>4 – 5</div>
+  <div class="row"><span class="sw" style="background:#e63946"></span>5 +</div>
+</div>
+
+<div class="learn" id="learn">
+  <h2>SEISMIC <span>LEARNING</span></h2>
+  <div class="sec">
+    <div class="cap">Gutenberg–Richter · fits live, adapts each refresh</div>
+    <div class="kv"><span class="k">b-value</span><span class="v" id="l_b">—</span></div>
+    <div class="kv"><span class="k">completeness M<sub>c</sub></span><span class="v" id="l_mc">—</span></div>
+    <div class="kv"><span class="k">expected M≥5 / day</span><span class="v" id="l_m5">—</span></div>
+    <div class="hint" id="l_bhint">fitting from the live catalog…</div>
+  </div>
+  <div class="sec">
+    <div class="cap">Rate forecast · self-scoring vs naive baseline</div>
+    <div class="kv"><span class="k">predicted next 15 min</span><span class="big" id="l_pred">—</span></div>
+    <div class="kv"><span class="k">resolved windows</span><span class="v" id="l_n">0</span></div>
+    <div class="kv"><span class="k">skill vs naive</span><span class="v" id="l_skill">—</span></div>
+    <div class="kv"><span class="k">error (MAE)</span><span class="v" id="l_mae">—</span></div>
+    <div class="hint" id="l_verdict">warming up — needs a few 15-min windows to score.</div>
+  </div>
+  <div class="sec" style="border-bottom:none">
+    <div class="cap">Aftershock watch · Omori</div>
+    <div class="watch" id="l_after">no significant mainshock (M≥5) in the last 6h.</div>
+  </div>
+</div>
+
+<div class="fail" id="fail">
+  <div><h2 style="color:var(--down)">Map library failed to load</h2>
+  <p style="color:var(--dim)">This tool needs internet access to load the map tiles (Leaflet CDN).<br>
+  Check your connection and reload. The data feeds themselves are USGS, wheretheiss.at and airplanes.live.</p></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const $=id=>document.getElementById(id);
+const setDot=(id,cls)=>{$(id).className='dot '+cls;};
+const ago=ms=>{const s=Math.floor((Date.now()-ms)/1000);if(s<60)return s+'s ago';const m=Math.floor(s/60);if(m<60)return m+'m ago';return Math.floor(m/60)+'h ago';};
+
+if(typeof L==='undefined'){ $('fail').style.display='flex'; }
+else { init(); }
+
+function init(){
+  const map=L.map('map',{worldCopyJump:true,zoomControl:false,minZoom:2}).setView([34.05,-118.24],6);
+  L.control.zoom({position:'bottomright'}).addTo(map);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+    subdomains:'abcd',maxZoom:19,
+    attribution:'&copy; OpenStreetMap &copy; CARTO · data: USGS, wheretheiss.at, airplanes.live'
+  }).addTo(map);
+
+  const qkLayer=L.layerGroup().addTo(map);
+  const flLayer=L.layerGroup().addTo(map);
+  const issLayer=L.layerGroup().addTo(map);
+  let issTrail=[], issLine=null, issMarker=null, issRing=null;
+
+  // ---------- seismic self-learning ----------
+  let catalog=[];                      // all_day feed: map markers + rate forecast
+  let grCat=[];                        // M4.5+ month feed: globally-complete b-value fit
+  const SW=15*60*1000;                 // forecast window (ms)
+  const SKEY='let_seismic_v1';
+  let S=loadS();
+  function loadS(){try{const r=localStorage.getItem(SKEY);if(r)return JSON.parse(r);}catch(e){}
+    return {lambda:null,n:0,mErr:0,bErr:0,updates:0,lastBucket:null,pending:[]};}
+  function saveS(){try{localStorage.setItem(SKEY,JSON.stringify(S));}catch(e){}}
+
+  // Gutenberg–Richter: Aki-Utsu b-value MLE on the M4.5+ (globally complete) 30-day catalog
+  const MC=4.5;                        // fixed completeness — the M4.5 feed is complete by construction
+  function fitGR(){
+    const mags=grCat.filter(m=>m>=MC), n=mags.length;
+    if(n<20)return null;
+    const mean=mags.reduce((a,b)=>a+b,0)/n, dM=0.1;
+    const b=Math.log10(Math.E)/Math.max(1e-6,(mean-(MC-dM/2)));
+    const a=Math.log10(n)+b*MC;        // n spans ~30 days
+    return {b,Mc:MC,n,expM5:Math.pow(10,a-b*5)/30};   // convert to per-day
+  }
+  async function loadGR(){
+    try{
+      const d=await(await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson')).json();
+      grCat=d.features.map(f=>f.properties.mag).filter(m=>m!=null);
+      seismicUpdate();
+    }catch(e){}
+  }
+
+  // adaptive Poisson-rate forecast, scored vs naive persistence
+  function seismicForecast(cat){
+    if(!cat.length)return;             // wait for the all_day catalog before forecasting
+    const now=Date.now(), bucket=Math.floor(now/SW);
+    const cnt=(t0,t1)=>cat.filter(x=>x.t>=t0&&x.t<t1).length;
+    const keep=[];
+    for(const p of S.pending){
+      if(now<p.target){keep.push(p);continue;}        // not matured
+      const actual=cnt(p.made,p.target);
+      S.n++; S.mErr+=Math.abs(p.pred-actual); S.bErr+=Math.abs(p.base-actual);
+      S.lambda=(S.lambda==null?actual:S.lambda+0.2*(actual-S.lambda));   // learn
+      S.updates++;
+    }
+    S.pending=keep;
+    if(S.lastBucket!==bucket){                         // one prediction per window
+      S.lastBucket=bucket;
+      if(S.lambda==null)S.lambda=cnt(now-4*SW,now)/4;
+      const made=bucket*SW;
+      S.pending.push({made,target:made+SW,pred:S.lambda,base:cnt(made-SW,made)});
+    }
+    saveS();
+  }
+
+  function seismicUpdate(){
+    const gr=fitGR();
+    if(gr){
+      $('l_b').textContent=gr.b.toFixed(2);
+      $('l_b').className='v '+(gr.b>=0.8&&gr.b<=1.2?'up':'');
+      $('l_mc').textContent='M '+gr.Mc.toFixed(1);
+      $('l_m5').textContent='~'+gr.expM5.toFixed(1);
+      $('l_bhint').textContent=`fitted from ${gr.n} quakes ≥ M4.5 (30d) · nature sits near b≈1.0`+
+        `${gr.b>=0.85&&gr.b<=1.15?' — your live fit agrees.':'.'}`;
+    }
+    seismicForecast(catalog);
+    $('l_pred').textContent=S.lambda==null?'—':'~'+S.lambda.toFixed(1);
+    $('l_n').textContent=S.n;
+    if(S.n>0){
+      const skill=1-(S.mErr/Math.max(S.bErr,1e-9));
+      const el=$('l_skill'); el.textContent=(skill>=0?'+':'')+skill.toFixed(2);
+      el.className='v '+(skill>0?'up':'down');
+      $('l_mae').textContent=(S.mErr/S.n).toFixed(2)+' (naive '+(S.bErr/S.n).toFixed(2)+')';
+      $('l_verdict').textContent = S.n<4 ? 'scoring… leave it running for a cleaner read.' :
+        (skill>0.05?'✓ learner is beating naive persistence — seismic rates really are forecastable.'
+        :(skill<-0.05?'naive is ahead so far — the count is noisy at this window.'
+        :'roughly tied with naive — the rate is near-constant.'));
+    }
+    const now=Date.now();
+    const big=catalog.filter(x=>x.m>=5&&now-x.t<6*3600*1000).sort((a,b)=>b.m-a.m)[0];
+    if(big){
+      const hrs=(now-big.t)/3600000;
+      $('l_after').innerHTML=`<b>M${big.m.toFixed(1)}</b> ${big.place||''} · ${hrs.toFixed(1)}h ago.<br>`+
+        `Aftershocks elevated, decaying ∝ 1/t (Omori) — most occur in the first hours.`;
+    }else $('l_after').textContent='no significant mainshock (M≥5) in the last 6h.';
+  }
+
+  // ---------- earthquakes ----------
+  const qkColor=m=>m>=5?'#e63946':m>=4?'#f4785d':m>=3?'#f4a261':m>=2?'#ffd166':'#7fd8be';
+  async function loadQuakes(){
+    if(!$('t_qk').checked)return;
+    try{
+      const d=await(await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson')).json();
+      catalog=d.features.filter(f=>f.properties.mag!=null&&f.geometry).map(f=>({
+        t:f.properties.time, m:f.properties.mag,
+        lat:f.geometry.coordinates[1], lon:f.geometry.coordinates[0], place:f.properties.place}));
+      seismicUpdate();
+      qkLayer.clearLayers();
+      d.features.forEach(f=>{
+        const[lon,lat,depth]=f.geometry.coordinates, m=f.properties.mag;
+        if(lat==null||m==null)return;
+        L.circleMarker([lat,lon],{radius:Math.max(3,3+Math.pow(Math.max(m,0),1.7)),
+          color:qkColor(m),weight:1,fillColor:qkColor(m),fillOpacity:.55})
+         .bindPopup(`<b>M ${m.toFixed(1)}</b> &nbsp; ${f.properties.place||'—'}<br>`+
+           `depth ${depth?depth.toFixed(0):'?'} km · ${ago(f.properties.time)}`)
+         .addTo(qkLayer);
+      });
+      $('c_qk').textContent=d.features.length; setDot('d_qk','on');
+    }catch(e){ setDot('d_qk','err'); }
+  }
+
+  // ---------- ISS ----------
+  const issIcon=L.divIcon({className:'',html:'<div class="iss-ic">🛰️</div>',iconSize:[24,24],iconAnchor:[12,12]});
+  async function loadISS(){
+    if(!$('t_iss').checked)return;
+    try{
+      const d=await(await fetch('https://api.wheretheiss.at/v1/satellites/25544')).json();
+      const pos=[d.latitude,d.longitude];
+      if(!issMarker){issMarker=L.marker(pos,{icon:issIcon}).addTo(issLayer);
+        issRing=L.circle(pos,{radius:2200000,color:'#f0b90b',weight:1,opacity:.4,fillColor:'#f0b90b',fillOpacity:.05}).addTo(issLayer);}
+      else{issMarker.setLatLng(pos); issRing.setLatLng(pos);}
+      issMarker.bindPopup(`<b>🛰️ ISS (Zarya)</b><br>lat ${d.latitude.toFixed(2)}, lon ${d.longitude.toFixed(2)}<br>`+
+        `alt ${d.altitude.toFixed(0)} km · ${d.velocity.toFixed(0)} km/h`);
+      issTrail.push(pos); if(issTrail.length>90)issTrail.shift();
+      if(issLine)issLine.setLatLngs(issTrail);
+      else issLine=L.polyline(issTrail,{color:'#f0b90b',weight:1.5,opacity:.5,dashArray:'4 5'}).addTo(issLayer);
+      $('c_iss').textContent='live'; setDot('d_iss','on');
+    }catch(e){ setDot('d_iss','err'); }
+  }
+
+  // ---------- flights ----------
+  const planeIcon=(track)=>L.divIcon({className:'plane',iconSize:[16,16],iconAnchor:[8,8],
+    html:`<svg width="16" height="16" viewBox="0 0 24 24" style="transform:rotate(${track||0}deg)">`+
+      `<path fill="#4dd2ff" d="M12 2 L14 12 L22 16 L22 18 L14 15 L13.5 21 L16 22.5 L16 24 L12 23 L8 24 L8 22.5 L10.5 21 L10 15 L2 18 L2 16 L10 12 Z"/></svg>`});
+  async function loadFlights(){
+    if(!$('t_fl').checked)return;
+    try{
+      const c=map.getCenter();
+      const d=await(await fetch(`https://api.airplanes.live/v2/point/${c.lat.toFixed(3)}/${c.lng.toFixed(3)}/250`)).json();
+      const ac=(d.ac||[]).filter(a=>a.lat&&a.lon).slice(0,500);
+      flLayer.clearLayers();
+      ac.forEach(a=>{
+        L.marker([a.lat,a.lon],{icon:planeIcon(a.track)})
+         .bindPopup(`<b>✈ ${(a.flight||a.r||a.hex||'?').trim()}</b>${a.desc?' · '+a.desc:''}<br>`+
+           `alt ${a.alt_baro==='ground'?'on ground':(a.alt_baro||'?')+' ft'} · ${a.gs?Math.round(a.gs)+' kt':'? kt'}<br>`+
+           `hdg ${a.track!=null?Math.round(a.track)+'°':'?'} · type ${a.t||'?'}`)
+         .addTo(flLayer);
+      });
+      $('c_fl').textContent=ac.length; setDot('d_fl','on');
+    }catch(e){ setDot('d_fl','err'); }
+  }
+
+  // ---------- layer toggles ----------
+  const wire=(cb,layer,loader,clearCnt)=>{
+    $(cb).addEventListener('change',e=>{
+      if(e.target.checked){map.addLayer(layer);loader();}
+      else{map.removeLayer(layer);$(clearCnt).textContent='—';setDot('d_'+cb.split('_')[1],'');}
+    });
+  };
+  wire('t_qk',qkLayer,loadQuakes,'c_qk');
+  wire('t_iss',issLayer,loadISS,'c_iss');
+  wire('t_fl',flLayer,loadFlights,'c_fl');
+
+  // refetch flights when the map is moved (debounced)
+  let moveT=null;
+  map.on('moveend',()=>{clearTimeout(moveT);moveT=setTimeout(loadFlights,600);});
+
+  function tickFoot(){$('foot').textContent='updated '+new Date().toLocaleTimeString('en-US',{hour12:false});}
+
+  // ---------- loops ----------
+  loadGR(); loadQuakes(); loadISS(); loadFlights(); tickFoot();
+  setInterval(()=>{loadISS();},5000);
+  setInterval(()=>{loadFlights();tickFoot();},20000);
+  setInterval(()=>{loadQuakes();},60000);          // map markers + live rate forecast/scoring
+  setInterval(()=>{loadGR();},300000);             // b-value catalog (slow-moving) every 5 min
+
+  window._map=map; // for debugging
+}
+</script>

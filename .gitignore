@@ -1,0 +1,4 @@
+# local tooling / OS cruft
+.claude/
+*.log
+.DS_Store

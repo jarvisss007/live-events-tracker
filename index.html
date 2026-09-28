@@ -3,7 +3,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
-  :root{--bg:#0b0e14;--panel:rgba(17,22,34,.92);--line:#242c3d;--txt:#e6edf3;--dim:#8b98a9;--dimmer:#5a6675;--accent:#f0b90b;--up:#0ecb81;--down:#f6465d;}
+  :root{--bg:#0b0e14;--panel:rgba(17,22,34,.92);--line:#242c3d;--txt:#e6edf3;--dim:#8b98a9;--dimmer:#5a6675;--accent:#f0b90b;--up:#0ecb81;--down:#f6465d;--warn:#ffb020;}
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--txt);
     font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
@@ -47,6 +47,8 @@
   .learn .up{color:var(--up)} .learn .down{color:var(--down)}
   .learn .watch{font-size:11px;line-height:1.5;color:var(--dim)}
   .learn .watch b{color:var(--down)}
+  .learn .asof{font-size:9.5px;color:var(--dimmer);margin-top:6px}
+  .learn .sec.stale{box-shadow:inset 3px 0 0 var(--warn)} .learn .sec.stale .asof{color:var(--warn)}
   .fail{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:2000;
     background:var(--bg);text-align:center;padding:30px}
   /* leaflet marker glyphs */
@@ -85,24 +87,27 @@
 
 <div class="learn" id="learn">
   <h2>SEISMIC <span>LEARNING</span></h2>
-  <div class="sec">
+  <div class="sec" id="s_gr">
     <div class="cap">Gutenberg–Richter · fits live, adapts each refresh</div>
     <div class="kv"><span class="k">b-value</span><span class="v" id="l_b">—</span></div>
     <div class="kv"><span class="k">completeness M<sub>c</sub></span><span class="v" id="l_mc">—</span></div>
     <div class="kv"><span class="k">expected M≥5 / day</span><span class="v" id="l_m5">—</span></div>
     <div class="hint" id="l_bhint">fitting from the live catalog…</div>
+    <div class="asof" id="a_gr">waiting for USGS…</div>
   </div>
-  <div class="sec">
+  <div class="sec" id="s_fc">
     <div class="cap">Rate forecast · self-scoring vs naive baseline</div>
     <div class="kv"><span class="k">predicted next 15 min</span><span class="big" id="l_pred">—</span></div>
     <div class="kv"><span class="k">resolved windows</span><span class="v" id="l_n">0</span></div>
     <div class="kv"><span class="k">skill vs naive</span><span class="v" id="l_skill">—</span></div>
     <div class="kv"><span class="k">error (MAE)</span><span class="v" id="l_mae">—</span></div>
     <div class="hint" id="l_verdict">warming up — needs a few 15-min windows to score.</div>
+    <div class="asof" id="a_fc">waiting for USGS…</div>
   </div>
-  <div class="sec" style="border-bottom:none">
+  <div class="sec" id="s_af" style="border-bottom:none">
     <div class="cap">Aftershock watch · Omori</div>
     <div class="watch" id="l_after">no significant mainshock (M≥5) in the last 6h.</div>
+    <div class="asof" id="a_af">waiting for USGS…</div>
   </div>
 </div>
 
@@ -123,12 +128,14 @@ if(typeof L==='undefined'){ $('fail').style.display='flex'; }
 else { init(); }
 
 function init(){
-  const map=L.map('map',{worldCopyJump:true,zoomControl:false,minZoom:2}).setView([34.05,-118.24],6);
+  const map=L.map('map',{worldCopyJump:true,zoomControl:false,minZoom:2,maxZoom:16}).setView([34.05,-118.24],6);
   L.control.zoom({position:'bottomright'}).addTo(map);
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
-    subdomains:'abcd',maxZoom:19,
-    attribution:'&copy; OpenStreetMap &copy; CARTO · data: USGS, wheretheiss.at, airplanes.live'
+  // CARTO dark_all went key-only (serves an "API KEY REQUIRED" placeholder with HTTP 200) — Esri canvas is keyless
+  const esri='https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/';
+  L.tileLayer(esri+'World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',{maxZoom:16,
+    attribution:'Tiles &copy; Esri, HERE, Garmin, &copy; OpenStreetMap · data: USGS, wheretheiss.at, airplanes.live'
   }).addTo(map);
+  L.tileLayer(esri+'World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',{maxZoom:16}).addTo(map);
 
   const qkLayer=L.layerGroup().addTo(map);
   const flLayer=L.layerGroup().addTo(map);
@@ -136,7 +143,10 @@ function init(){
   let issTrail=[], issLine=null, issMarker=null, issRing=null;
 
   // ---------- seismic self-learning ----------
+  let flOk=null;                       // last successful flights fetch
   let catalog=[];                      // all_day feed: map markers + rate forecast
+  // freshness: USGS 'generated' time of the data we hold + whether the last fetch failed
+  const feed={gr:{gen:null,err:false,maxAge:11*60e3}, qk:{gen:null,err:false,maxAge:5*60e3}};
   let grCat=[];                        // M4.5+ month feed: globally-complete b-value fit
   const SW=15*60*1000;                 // forecast window (ms)
   const SKEY='let_seismic_v1';
@@ -159,8 +169,10 @@ function init(){
     try{
       const d=await(await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_month.geojson')).json();
       grCat=d.features.map(f=>f.properties.mag).filter(m=>m!=null);
+      feed.gr.gen=d.metadata.generated; feed.gr.err=false;
       seismicUpdate();
-    }catch(e){}
+    }catch(e){ feed.gr.err=true; }
+    freshness();
   }
 
   // adaptive Poisson-rate forecast, scored vs naive persistence
@@ -169,8 +181,10 @@ function init(){
     const now=Date.now(), bucket=Math.floor(now/SW);
     const cnt=(t0,t1)=>cat.filter(x=>x.t>=t0&&x.t<t1).length;
     const keep=[];
+    const covered=(feed.qk.gen||now)-24*3600e3;          // all_day only reaches back 24h
     for(const p of S.pending){
       if(now<p.target){keep.push(p);continue;}        // not matured
+      if(p.made<covered)continue;                      // window fell off the feed while closed: unscorable, drop it
       const actual=cnt(p.made,p.target);
       S.n++; S.mErr+=Math.abs(p.pred-actual); S.bErr+=Math.abs(p.base-actual);
       S.lambda=(S.lambda==null?actual:S.lambda+0.2*(actual-S.lambda));   // learn
@@ -227,6 +241,7 @@ function init(){
       catalog=d.features.filter(f=>f.properties.mag!=null&&f.geometry).map(f=>({
         t:f.properties.time, m:f.properties.mag,
         lat:f.geometry.coordinates[1], lon:f.geometry.coordinates[0], place:f.properties.place}));
+      feed.qk.gen=d.metadata.generated; feed.qk.err=false;
       seismicUpdate();
       qkLayer.clearLayers();
       d.features.forEach(f=>{
@@ -239,7 +254,8 @@ function init(){
          .addTo(qkLayer);
       });
       $('c_qk').textContent=d.features.length; setDot('d_qk','on');
-    }catch(e){ setDot('d_qk','err'); }
+    }catch(e){ setDot('d_qk','err'); feed.qk.err=true; }
+    freshness();
   }
 
   // ---------- ISS ----------
@@ -279,8 +295,9 @@ function init(){
            `hdg ${a.track!=null?Math.round(a.track)+'°':'?'} · type ${a.t||'?'}`)
          .addTo(flLayer);
       });
-      $('c_fl').textContent=ac.length; setDot('d_fl','on');
+      $('c_fl').textContent=ac.length; setDot('d_fl','on'); flOk=Date.now();
     }catch(e){ setDot('d_fl','err'); }
+    tickFoot();
   }
 
   // ---------- layer toggles ----------
@@ -298,12 +315,31 @@ function init(){
   let moveT=null;
   map.on('moveend',()=>{clearTimeout(moveT);moveT=setTimeout(loadFlights,600);});
 
-  function tickFoot(){$('foot').textContent='updated '+new Date().toLocaleTimeString('en-US',{hour12:false});}
+  // footer + panel stamps show when each feed's data is FROM, never just "the clock ticked"
+  const hms=ms=>new Date(ms).toLocaleTimeString('en-US',{hour12:false});
+  function tickFoot(){
+    const q=feed.qk.gen?hms(feed.qk.gen):'—', f=flOk?hms(flOk):'—';
+    $('foot').textContent=`quakes as of ${q} · flights as of ${f}`;
+  }
+  function freshness(){
+    const now=Date.now();
+    const stamp=(k,secs,asofs)=>{
+      const f=feed[k], age=f.gen==null?Infinity:now-f.gen, stale=f.err||age>f.maxAge;
+      const txt=f.gen==null?(f.err?'USGS fetch failed — no data yet':'waiting for USGS…')
+        :`USGS data as of ${hms(f.gen)} (${ago(f.gen)})`+(f.err?' · last fetch FAILED, showing old numbers':stale?' · STALE':'');
+      secs.forEach(id=>$(id).classList.toggle('stale',stale));
+      asofs.forEach(id=>$(id).textContent=txt);
+    };
+    stamp('gr',['s_gr'],['a_gr']);
+    stamp('qk',['s_fc','s_af'],['a_fc','a_af']);
+    tickFoot();
+  }
 
   // ---------- loops ----------
-  loadGR(); loadQuakes(); loadISS(); loadFlights(); tickFoot();
+  loadGR(); loadQuakes(); loadISS(); loadFlights();
   setInterval(()=>{loadISS();},5000);
-  setInterval(()=>{loadFlights();tickFoot();},20000);
+  setInterval(()=>{loadFlights();},20000);
+  setInterval(freshness,15000);                    // ages the stamps even if every fetch hangs
   setInterval(()=>{loadQuakes();},60000);          // map markers + live rate forecast/scoring
   setInterval(()=>{loadGR();},300000);             // b-value catalog (slow-moving) every 5 min
 

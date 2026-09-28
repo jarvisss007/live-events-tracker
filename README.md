@@ -26,6 +26,17 @@ The obvious flight API (OpenSky) has locked anonymous access behind OAuth, and t
 no-key, CORS-clean ADS-B feed that worked. USGS and wheretheiss.at are rock-solid and
 public. Everything runs client-side; there is no server and no key anywhere.
 
+**Status 2026-09-27:** airplanes.live has since closed anonymous API access (every request
+returns 403 "contact us"), so the Flights layer is **down** — its dot shows red and the
+footer shows `flights as of —`. adsb.lol / adsb.fi still send no CORS headers. Reviving it
+needs either a registered airplanes.live key or a tiny local proxy.
+
+**Freshness:** every seismic section is stamped with the USGS `generated` time of the data
+it holds, and turns amber (with "last fetch FAILED, showing old numbers") when a fetch fails
+or the data ages past 5 min (all_day) / 11 min (4.5_month). The footer reports per-feed
+"as of" times, never a bare clock. Forecast windows that fell off the 24h feed while the
+page was closed are dropped, not scored as zero quakes.
+
 ## Seismic learning (the self-adapting part)
 
 The top-right **Seismic Learning** panel is a genuine, honest learning module — and a
@@ -58,7 +69,8 @@ statistical structure lives.
 - **Flights are center-based**, capped at 250 nm and 500 markers — zoom into a region
   (a city, an ocean corridor) for the useful view; a whole-world zoom only shows planes
   near the center point.
-- Map tiles are CartoDB "dark" — intentionally muted so the data pops; continents look
+- Map tiles are Esri World Dark Gray Canvas (CARTO dark_all went key-only in 2026 and
+  serves an "API KEY REQUIRED" placeholder with HTTP 200) — intentionally muted so the data pops; continents look
   faint by design.
 - Be a good citizen: the refresh intervals are deliberately gentle (these are free
   community services). Don't crank them down.

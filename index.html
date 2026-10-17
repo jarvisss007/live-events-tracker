@@ -71,7 +71,7 @@
     <span class="ic">🛰️</span><span class="name"><b>ISS</b><small>updates every 5s</small></span>
     <span class="cnt" id="c_iss">—</span><span class="dot" id="d_iss"></span></label>
   <label class="layer"><input type="checkbox" id="t_fl" checked>
-    <span class="ic">✈️</span><span class="name"><b>Flights</b><small>within 250nm of center</small></span>
+    <span class="ic">✈️</span><span class="name"><b>Flights</b><small id="s_fl">unavailable since 2026-09-27 (403)</small></span>
     <span class="cnt" id="c_fl">—</span><span class="dot" id="d_fl"></span></label>
   <div class="foot" id="foot">connecting…</div>
 </div>
@@ -96,12 +96,14 @@
     <div class="asof" id="a_gr">waiting for USGS…</div>
   </div>
   <div class="sec" id="s_fc">
-    <div class="cap">Rate forecast · self-scoring vs naive baseline</div>
+    <div class="cap">Rate forecast · self-scoring vs two simple baselines</div>
     <div class="kv"><span class="k">predicted next 15 min</span><span class="big" id="l_pred">—</span></div>
     <div class="kv"><span class="k">resolved windows</span><span class="v" id="l_n">0</span></div>
-    <div class="kv"><span class="k">skill vs naive</span><span class="v" id="l_skill">—</span></div>
+    <div class="kv"><span class="k">skill vs last window</span><span class="v" id="l_skill">—</span></div>
+    <div class="kv"><span class="k">skill vs 24h mean</span><span class="v" id="l_skill24">—</span></div>
     <div class="kv"><span class="k">error (MAE)</span><span class="v" id="l_mae">—</span></div>
     <div class="hint" id="l_verdict">warming up — needs a few 15-min windows to score.</div>
+    <div class="hint">Caveats: n is small (one window per 15 min) and the verdict flips on as few as 4 windows at the ±0.05 threshold. Counts come from the USGS all_day catalog, which mixes regional networks (complete to ~M1) with global coverage (complete to ~M4.5). Scores live only in this browser's localStorage; nothing is stored or sent anywhere else.</div>
     <div class="asof" id="a_fc">waiting for USGS…</div>
   </div>
   <div class="sec" id="s_af" style="border-bottom:none">
@@ -154,6 +156,7 @@ function init(){
   function loadS(){try{const r=localStorage.getItem(SKEY);if(r)return JSON.parse(r);}catch(e){}
     return {lambda:null,n:0,mErr:0,bErr:0,updates:0,lastBucket:null,pending:[]};}
   function saveS(){try{localStorage.setItem(SKEY,JSON.stringify(S));}catch(e){}}
+  for(const k of ['t24n','t24Err','t24mErr'])S[k]=S[k]||0;   // 24h-mean baseline tallies (absent in older saved state)
 
   // Gutenberg–Richter: Aki-Utsu b-value MLE on the M4.5+ (globally complete) 30-day catalog
   const MC=4.5;                        // fixed completeness — the M4.5 feed is complete by construction
@@ -175,7 +178,7 @@ function init(){
     freshness();
   }
 
-  // adaptive Poisson-rate forecast, scored vs naive persistence
+  // adaptive Poisson-rate forecast, scored vs last-window persistence and a trailing-24h mean
   function seismicForecast(cat){
     if(!cat.length)return;             // wait for the all_day catalog before forecasting
     const now=Date.now(), bucket=Math.floor(now/SW);
@@ -187,6 +190,7 @@ function init(){
       if(p.made<covered)continue;                      // window fell off the feed while closed: unscorable, drop it
       const actual=cnt(p.made,p.target);
       S.n++; S.mErr+=Math.abs(p.pred-actual); S.bErr+=Math.abs(p.base-actual);
+      if(p.base24!=null){S.t24n++; S.t24mErr+=Math.abs(p.pred-actual); S.t24Err+=Math.abs(p.base24-actual);}  // same windows for both
       S.lambda=(S.lambda==null?actual:S.lambda+0.2*(actual-S.lambda));   // learn
       S.updates++;
     }
@@ -195,7 +199,8 @@ function init(){
       S.lastBucket=bucket;
       if(S.lambda==null)S.lambda=cnt(now-4*SW,now)/4;
       const made=bucket*SW;
-      S.pending.push({made,target:made+SW,pred:S.lambda,base:cnt(made-SW,made)});
+      const lo=Math.max(made-24*3600e3,covered), nW=(made-lo)/SW;   // trailing mean over what the 24h feed still holds
+      S.pending.push({made,target:made+SW,pred:S.lambda,base:cnt(made-SW,made),base24:nW>=48?cnt(lo,made)/nW:null});
     }
     saveS();
   }
@@ -217,11 +222,16 @@ function init(){
       const skill=1-(S.mErr/Math.max(S.bErr,1e-9));
       const el=$('l_skill'); el.textContent=(skill>=0?'+':'')+skill.toFixed(2);
       el.className='v '+(skill>0?'up':'down');
-      $('l_mae').textContent=(S.mErr/S.n).toFixed(2)+' (naive '+(S.bErr/S.n).toFixed(2)+')';
-      $('l_verdict').textContent = S.n<4 ? 'scoring… leave it running for a cleaner read.' :
-        (skill>0.05?'✓ learner is beating naive persistence — seismic rates really are forecastable.'
-        :(skill<-0.05?'naive is ahead so far — the count is noisy at this window.'
-        :'roughly tied with naive — the rate is near-constant.'));
+      const has24=S.t24n>0, skill24=has24?1-(S.t24mErr/Math.max(S.t24Err,1e-9)):null;
+      const e24=$('l_skill24'); e24.textContent=has24?(skill24>=0?'+':'')+skill24.toFixed(2)+` (n=${S.t24n})`:'—';
+      e24.className='v '+(has24?(skill24>0?'up':'down'):'');
+      $('l_mae').textContent=(S.mErr/S.n).toFixed(2)+' (last '+(S.bErr/S.n).toFixed(2)+(has24?' · 24h '+(S.t24Err/S.t24n).toFixed(2):'')+')';
+      const vs24=!has24||S.t24n<4?'':(skill24>0.05?' It is also ahead of the 24h mean, but that is a small-n read.'
+        :' It is not ahead of the 24h mean (skill within ±0.05 or below), so this shows a smoothed average, nothing more.');
+      $('l_verdict').textContent = S.n<4 ? `scoring… n=${S.n} is far too small for any read.` :
+        (skill>0.05?'Beats last-window persistence, a weak baseline for count data; not evidence that rates are forecastable.'+vs24
+        :(skill<-0.05?'Last-window persistence is ahead so far; with so few windows that is mostly noise.'
+        :'Roughly tied with last-window persistence.'))+` (n=${S.n})`;
     }
     const now=Date.now();
     const big=catalog.filter(x=>x.m>=5&&now-x.t<6*3600*1000).sort((a,b)=>b.m-a.m)[0];
@@ -285,7 +295,9 @@ function init(){
     if(!$('t_fl').checked)return;
     try{
       const c=map.getCenter();
-      const d=await(await fetch(`https://api.airplanes.live/v2/point/${c.lat.toFixed(3)}/${c.lng.toFixed(3)}/250`)).json();
+      const r=await fetch(`https://api.airplanes.live/v2/point/${c.lat.toFixed(3)}/${c.lng.toFixed(3)}/250`);
+      if(!r.ok)throw new Error('flights HTTP '+r.status);   // 403 since 2026-09-27: never show a green dot on an error body
+      const d=await r.json();
       const ac=(d.ac||[]).filter(a=>a.lat&&a.lon).slice(0,500);
       flLayer.clearLayers();
       ac.forEach(a=>{
@@ -296,6 +308,7 @@ function init(){
          .addTo(flLayer);
       });
       $('c_fl').textContent=ac.length; setDot('d_fl','on'); flOk=Date.now();
+      $('s_fl').textContent='within 250nm of center';        // feed revived: drop the "unavailable" label
     }catch(e){ setDot('d_fl','err'); }
     tickFoot();
   }
